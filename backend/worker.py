@@ -1,0 +1,77 @@
+"""
+Railway/Render cron worker.
+Runs every 30 minutes.
+Fetches all users from Supabase and runs the pipeline for each.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+import sys
+
+# Ensure backend/ is on path
+sys.path.insert(0, os.path.dirname(__file__))
+
+import config  # noqa: F401  # loads .env
+
+from integrations.supabase.client import fetch_all_users
+from pipeline.supabase_runner import run_for_user
+
+
+def get_date_str() -> str:
+    """Returns today's date in IST (UTC+5:30)."""
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    ist_offset = datetime.timedelta(hours=5, minutes=30)
+    now_ist = now_utc + ist_offset
+    return now_ist.strftime("%Y-%m-%d")
+
+
+def main() -> None:
+    date_str = get_date_str()
+    print(f"[worker] starting run for date={date_str}")
+
+    users = fetch_all_users()
+    print(f"[worker] found {len(users)} users")
+
+    if not users:
+        print("[worker] no users found — exiting")
+        return
+
+    results = []
+    for user in users:
+        user_id = user.get("id", "")
+        user_email = user.get("email", "")
+        clickup_token = user.get("clickupAccessToken", "")
+
+        if not user_id or not user_email:
+            print(f"[worker] skipping invalid user: {user}")
+            continue
+
+        if not clickup_token:
+            print(f"[worker] skipping {user_email} — no ClickUp token")
+            continue
+
+        try:
+            result = run_for_user(
+                user_id=user_id,
+                user_email=user_email,
+                clickup_token=clickup_token,
+                date_str=date_str,
+                push=True,
+            )
+            results.append(result)
+            print(f"[worker] ✓ {user_email}: {result}")
+        except Exception as e:
+            print(f"[worker] ✗ {user_email}: {e}")
+            results.append({"status": "error", "user": user_email, "error": str(e)})
+
+    ok = sum(1 for r in results if r.get("status") == "ok")
+    skip = sum(1 for r in results if r.get("status") == "no_data")
+    err = sum(1 for r in results if r.get("status") == "error")
+    print(f"[worker] done — ok={ok} skipped={skip} errors={err}")
+
+
+if __name__ == "__main__":
+    main()
+

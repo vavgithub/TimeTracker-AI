@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+Credentials.json
+calendar_token.json
+
+# Frontend build artifacts
+frontend/dist/
+
+# Generated pipeline output (optional: keep local only)
+# out/
+service_account.json
+service_account.json
+out/
+.vscode/
