@@ -12,6 +12,15 @@ OUTPUT_DIR = REPO_ROOT / "out"
 
 load_dotenv(REPO_ROOT / ".env")
 
+import json, tempfile, os
+
+gcp_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if gcp_json and not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    tmp.write(gcp_json)
+    tmp.flush()
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+
 USER_EMAIL = "khyathiatvav@gmail.com"
 HOSTNAME = "khyathi-Inspiron-14-7445-2-in-1"
 
