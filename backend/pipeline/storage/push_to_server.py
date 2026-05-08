@@ -48,6 +48,8 @@ def _post_json(path_suffix: str, body: dict[str, Any]) -> None:
 
     for attempt in range(1, 4):
         try:
+            print(f"[debug] posting to: {url}")
+            print(f"[debug] api key: {(key[:10] + '...') if len(key) > 10 else (key + '...')}")
             resp = requests.post(url, json=body, headers=headers, timeout=30)
             if resp.status_code < 400:
                 print(f"[push] ✓ {path_suffix} → {resp.status_code}")
@@ -83,7 +85,7 @@ def _as_int(x: Any, default: int = 0) -> int:
 
 
 def push_daily_summary(date_str: str, out_dir: Path) -> None:
-    """POST /api/push/daily-summary — trimmed productivity + deep_work from eod."""
+    """POST /api/v1/pipeline/daily-summary — trimmed productivity + deep_work from eod."""
     try:
         prod_path = out_dir / f"productivity_{date_str}.json"
         eod_path = out_dir / f"eod_{date_str}.json"
@@ -116,13 +118,13 @@ def push_daily_summary(date_str: str, out_dir: Path) -> None:
             "keystrokes": _as_int(prod.get("keystrokes"), 0),
             "mouse_clicks": _as_int(prod.get("mouse_clicks"), 0),
         }
-        _post_json("/api/push/daily-summary", body)
+        _post_json("/api/v1/pipeline/daily-summary", body)
     except Exception:
         return
 
 
 def push_eod_report(date_str: str, out_dir: Path) -> None:
-    """POST /api/push/eod-report — trimmed tasks, meetings, performance_signals, untracked + narrative."""
+    """POST /api/v1/pipeline/eod-report — trimmed tasks, meetings, performance_signals, untracked + narrative."""
     from pipeline.eod.summary_writer import format_eod_clickup_message
 
     try:
@@ -235,13 +237,13 @@ def push_eod_report(date_str: str, out_dir: Path) -> None:
             "performance_signals": performance_signals,
             "untracked": untracked_out,
         }
-        _post_json("/api/push/eod-report", body)
+        _post_json("/api/v1/pipeline/eod-report", body)
     except Exception:
         return
 
 
 def push_skill_profile(date_str: str, out_dir: Path) -> None:
-    """POST /api/push/skill-profile — date_str is week-ending ISO date; file skill_profile_{date_str}.json."""
+    """POST /api/v1/pipeline/skill-profile — date_str is week-ending ISO date; file skill_profile_{date_str}.json."""
     try:
         path = out_dir / f"skill_profile_{date_str}.json"
         raw = _read_json(path)
@@ -277,6 +279,6 @@ def push_skill_profile(date_str: str, out_dir: Path) -> None:
             "focus_score": round(_as_float(raw.get("focus_score")), 1),
             "consistency": _consistency,
         }
-        _post_json("/api/push/skill-profile", body)
+        _post_json("/api/v1/pipeline/skill-profile", body)
     except Exception:
         return
