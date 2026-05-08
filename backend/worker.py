@@ -28,7 +28,15 @@ def get_date_str() -> str:
 
 
 def main() -> None:
-    date_str = get_date_str()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--user-id', type=str, default=None)
+    parser.add_argument('--date', type=str, default=None)
+    parser.add_argument('--eod-only', action='store_true', default=False)
+    args = parser.parse_args()
+
+    date_str = args.date or get_date_str()
     print(f"[worker] starting run for date={date_str}")
 
     users = fetch_all_users()
@@ -39,6 +47,17 @@ def main() -> None:
         return
 
     results = []
+    if args.eod_only:
+        target_id = (args.user_id or "").strip()
+        if not target_id:
+            print("[worker] --eod-only requires --user-id")
+            return
+        user = next((u for u in users if str(u.get("id") or "") == target_id), None)
+        if not user:
+            print(f"[worker] user not found: {target_id}")
+            return
+        users = [user]
+
     for user in users:
         user_id = user.get("id", "")
         user_email = user.get("email", "")
@@ -58,6 +77,7 @@ def main() -> None:
                 user_email=user_email,
                 clickup_token=clickup_token,
                 date_str=date_str,
+                post_eod=bool(args.eod_only),
                 push=True,
             )
             results.append(result)
@@ -65,6 +85,9 @@ def main() -> None:
         except Exception as e:
             print(f"[worker] ✗ {user_email}: {e}")
             results.append({"status": "error", "user": user_email, "error": str(e)})
+
+        if args.eod_only:
+            return
 
     ok = sum(1 for r in results if r.get("status") == "ok")
     skip = sum(1 for r in results if r.get("status") == "no_data")

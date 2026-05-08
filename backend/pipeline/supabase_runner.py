@@ -28,6 +28,7 @@ def run_for_user(
     clickup_token: str,
     date_str: str,
     out_dir: Path | None = None,
+    post_eod: bool = False,
     push: bool = True,
 ) -> dict[str, Any]:
     """
@@ -136,13 +137,16 @@ def run_for_user(
     # 9. Generate EOD
     eod = generate_eod_summary(date_str, user_email, out_dir=out_dir)
 
-    # 10. Push to server
+    # Push daily-summary regardless of EOD posting
     if push:
         push_daily_summary(date_str, out_dir)
-        push_eod_report(date_str, out_dir)
-        print(f"[supabase_runner] pushed data for {user_email}")
 
-    _ = format_eod_clickup_message(eod)
+    if post_eod:
+        _ = format_eod_clickup_message(eod)
+
+        if push:
+            push_eod_report(date_str, out_dir)
+            print(f"[supabase_runner] pushed EOD for {user_email}")
 
     return {
         "status": "ok",
