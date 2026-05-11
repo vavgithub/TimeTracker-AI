@@ -243,14 +243,15 @@ def push_eod_report(date_str: str, out_dir: Path) -> None:
 
 
 def push_skill_profile(date_str: str, out_dir: Path) -> None:
-    """POST /api/v1/pipeline/skill-profile — date_str is week-ending ISO date; file skill_profile_{date_str}.json."""
+    """POST /api/v1/pipeline/skill-profile — reads skill_profile_{date_str}.json; body week_ending is date_str (daily or week end)."""
     try:
-        path = out_dir / f"skill_profile_{date_str}.json"
+        key = (date_str or "").strip()[:10]
+        path = out_dir / f"skill_profile_{key}.json"
         raw = _read_json(path)
         if not isinstance(raw, Mapping):
             return
 
-        print(f"[push] skill-profile → {date_str}")
+        print(f"[push] skill-profile → {key}")
 
         sb_in = raw.get("skill_breakdown")
         skill_breakdown: dict[str, dict[str, Any]] = {}
@@ -263,21 +264,21 @@ def push_skill_profile(date_str: str, out_dir: Path) -> None:
                     "percentage": round(_as_float(block.get("percentage")), 1),
                 }
 
-        _consistency_raw = raw.get("consistency")
-        _consistency: float | None = None
-        if _consistency_raw is not None:
-            try:
-                _consistency = round(float(_consistency_raw), 2)
-            except (TypeError, ValueError):
-                _consistency = None
+        def _consistency_to_float(val):
+            if val is None:
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            mapping = {"low": 0.25, "medium": 0.5, "high": 0.75, "very high": 1.0}
+            return mapping.get(str(val).lower().strip(), 0.0)
 
         body = {
             "user_email": str(raw.get("employee") or USER_EMAIL).strip(),
-            "week_ending": date_str,
+            "week_ending": key,
             "skill_breakdown": skill_breakdown,
             "top_skill": str(raw.get("top_skill") or ""),
-            "focus_score": round(_as_float(raw.get("focus_score")), 1),
-            "consistency": _consistency,
+            "focus_score": float(raw.get("focus_score") or 0.0),
+            "consistency": _consistency_to_float(raw.get("consistency")),
         }
         _post_json("/api/v1/pipeline/skill-profile", body)
     except Exception:

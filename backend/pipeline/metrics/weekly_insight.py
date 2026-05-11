@@ -125,7 +125,9 @@ def generate_weekly_insight(
     skill_path = out_dir / f"skill_profile_{week_end_date}.json"
     skill_data = _read_json(skill_path)
     if skill_data is None:
-        skill_data = build_skill_profile(week_end_date, window="weekly", employee=employee_email)
+        skill_data = build_skill_profile(
+            week_end_date, window="weekly", employee=employee_email, data_root=out_dir
+        )
         skill_path.write_text(json.dumps(skill_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # 3) Load or generate trend

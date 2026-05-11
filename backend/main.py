@@ -143,9 +143,9 @@ def _parse_args():
     )
     p.add_argument(
         "--skill-window",
-        choices=("weekly", "monthly"),
+        choices=("daily", "weekly", "monthly"),
         default="weekly",
-        help="Window for --skill-profile: weekly=7d inclusive, monthly=30d inclusive",
+        help="Window for --skill-profile: daily=1d, weekly=7d, monthly=30d (inclusive end date)",
     )
     p.add_argument(
         "--trend-report",

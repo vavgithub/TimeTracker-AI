@@ -2,6 +2,9 @@
 Railway/Render cron worker.
 Runs every 30 minutes.
 Fetches all users from Supabase and runs the pipeline for each.
+
+Skill profile (daily rollup) is written and pushed inside ``run_for_user`` whenever
+``push=True`` — same cadence as daily summary, not weekday-gated.
 """
 
 from __future__ import annotations
@@ -61,21 +64,14 @@ def main() -> None:
     for user in users:
         user_id = user.get("id", "")
         user_email = user.get("email", "")
-        clickup_token = user.get("clickupAccessToken", "")
-
         if not user_id or not user_email:
             print(f"[worker] skipping invalid user: {user}")
-            continue
-
-        if not clickup_token:
-            print(f"[worker] skipping {user_email} — no ClickUp token")
             continue
 
         try:
             result = run_for_user(
                 user_id=user_id,
                 user_email=user_email,
-                clickup_token=clickup_token,
                 date_str=date_str,
                 post_eod=bool(args.eod_only),
                 push=True,

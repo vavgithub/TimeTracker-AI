@@ -116,7 +116,7 @@ def build_performance_trend(
             # Generate weekly profile; it writes to default OUTPUT_DIR via build_skill_profile's out_dir,
             # but we return the dict here and also persist the trend report in out_dir.
             try:
-                prof = build_skill_profile(week_end, window="weekly", employee=employee_email)
+                prof = build_skill_profile(week_end, window="weekly", employee=employee_email, data_root=out_dir)
             except Exception:
                 prof = None
         if isinstance(prof, dict):

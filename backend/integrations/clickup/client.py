@@ -7,6 +7,26 @@ import requests
 BASE_URL = "https://api.clickup.com/api/v2"
 
 
+def resolve_clickup_api_token(stored_user_token: str | None) -> str | None:
+    """
+    Value from User.clickupAccessToken: only use as the API Authorization header when
+    it looks like a ClickUp personal API token (``pk_...``). Hashes and other opaque
+    placeholders are ignored so ``CLICKUP_TOKEN`` from the environment is used.
+
+    Set ``CLICKUP_TRUST_DB_TOKEN=1`` to pass through any non-empty stored string
+    (e.g. if you store a non-pk_ secret and accept the risk).
+    """
+    trust = (os.getenv("CLICKUP_TRUST_DB_TOKEN") or "").strip().lower() in ("1", "true", "yes")
+    t = (stored_user_token or "").strip()
+    if not t:
+        return None
+    if trust:
+        return t
+    if t.startswith("pk_"):
+        return t
+    return None
+
+
 class ClickUpClient:
     def __init__(self, token: str | None = None):
         self.token = token or os.getenv("CLICKUP_TOKEN") or ""

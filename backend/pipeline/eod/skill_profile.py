@@ -1,8 +1,10 @@
 """
 Aggregate EOD `skill_category` + meeting minutes across a date window.
 
-Writes ``out/skill_profile_YYYY-MM-DD.json`` where the date is the inclusive end
-of the period (last day in the window).
+Reads ``{data_root}/eod_YYYY-MM-DD.json`` for each day in the window.
+
+Writes ``{out_dir}/skill_profile_YYYY-MM-DD.json`` where the date is the inclusive end
+of the period (``daily`` = that single day; ``weekly`` = 7 days ending that date; etc.).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from typing import Any, Literal
 from config import OUTPUT_DIR, USER_EMAIL
 from pipeline.eod.summary_writer import categorise_task
 
-WindowKind = Literal["weekly", "monthly"]
+WindowKind = Literal["daily", "weekly", "monthly"]
 
 _SKILL_ORDER = (
     "development",
@@ -57,13 +59,21 @@ def _daterange_inclusive(start: date, end: date) -> list[date]:
 
 
 def _window_bounds(end_iso: str, window: WindowKind) -> tuple[date, date, int]:
-    end_d = date.fromisoformat(end_iso)
-    if window == "monthly":
+    end_d = date.fromisoformat(_normalize_end_iso(end_iso))
+    if window == "daily":
+        n = 1
+    elif window == "monthly":
         n = 30
     else:
         n = 7
     start_d = end_d - timedelta(days=n - 1)
     return start_d, end_d, n
+
+
+def _normalize_end_iso(end_iso: str) -> str:
+    """Accept YYYY-MM-DD or datetime-prefixed strings; pipeline passes calendar dates."""
+    s = (end_iso or "").strip()
+    return s[:10] if len(s) >= 10 else s
 
 
 def _normalize_skill(cat: str) -> str:
@@ -110,9 +120,11 @@ def build_skill_profile(
     end_date: str,
     window: WindowKind = "weekly",
     employee: str | None = None,
+    *,
+    data_root: Path | None = None,
 ) -> dict[str, Any]:
     start_d, end_d, _window_days = _window_bounds(end_date, window)
-    out_dir = _out_dir()
+    root = data_root if data_root is not None else _out_dir()
     period_str = f"{start_d.isoformat()} to {end_d.isoformat()}"
 
     minutes_by_skill: dict[str, float] = defaultdict(float)
@@ -121,7 +133,7 @@ def build_skill_profile(
     employee_resolved = (employee or "").strip()
 
     for d in _daterange_inclusive(start_d, end_d):
-        path = out_dir / f"eod_{d.isoformat()}.json"
+        path = root / f"eod_{d.isoformat()}.json"
         eod = _read_eod(path)
         day_skill_minutes: dict[str, float] = defaultdict(float)
 
@@ -212,10 +224,17 @@ def write_skill_profile(
     end_date: str,
     window: WindowKind = "weekly",
     employee: str | None = None,
+    *,
+    out_dir: Path | None = None,
 ) -> Path:
-    profile = build_skill_profile(end_date, window, employee)
-    out_dir = _out_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"skill_profile_{end_date}.json"
+    """
+    Write ``skill_profile_{end_date}.json`` under ``out_dir`` (default: OUTPUT_DIR).
+    EOD inputs are read from the same directory when ``out_dir`` is set (per-user runs).
+    """
+    root = out_dir if out_dir is not None else _out_dir()
+    end_key = _normalize_end_iso(end_date)
+    profile = build_skill_profile(end_key, window, employee, data_root=root)
+    root.mkdir(parents=True, exist_ok=True)
+    out_path = root / f"skill_profile_{end_key}.json"
     out_path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
     return out_path

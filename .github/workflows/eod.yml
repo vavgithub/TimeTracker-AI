@@ -39,10 +39,6 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: ${{ secrets.GCP_REGION }}
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/service_account.json
-          CLICKUP_TOKEN: ${{ secrets.CLICKUP_TOKEN }}
-          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
-          CLICKUP_USER_EMAIL: ${{ secrets.CLICKUP_USER_EMAIL }}
-          EOD_CLICKUP_CHANNEL_ID: ${{ secrets.EOD_CLICKUP_CHANNEL_ID }}
           ADMIN_SERVER_URL: ${{ secrets.ADMIN_SERVER_URL }}
           PUSH_API_KEY: ${{ secrets.PUSH_API_KEY }}
           EMPLOYEE_ROLE: ${{ secrets.EMPLOYEE_ROLE }}
