@@ -114,7 +114,7 @@ def run_for_user(
 
     totals = {
         "active_minutes": active_minutes,
-        "idle_minutes": sum(c.get("summary", {}).get("afkMs", 0) or 0 for c in chunks) / 60000,
+        "idle_minutes": sum(c.get("afkMs", 0) or 0 for c in chunks) / 60000,
         "active_input_minutes": active_minutes,
         "productivity_pct": round(
             sum(s.get("activity_rate", 0) for s in sessions) / max(len(sessions), 1), 1

@@ -1,19 +1,12 @@
 """
-Converts Supabase WorkActivityChunk summaries into the same
+Converts Supabase ActivityChunk + ActivityChunkEntry rows into the same
 event + session format that the existing pipeline expects.
-
-Each chunk covers ~2 minutes. summary contains:
-  apps: [{ app, durationMs }]
-  titles: [{ app, title, durationMs }]
-  domains: [{ domain, durationMs, visitCount }]
-  activeMs: int
-  afkMs: int
-  date: ISO string
 """
 
 from __future__ import annotations
 
 import datetime
+from urllib.parse import urlparse
 from typing import Any
 
 MS_TO_SEC = 1 / 1000
@@ -39,38 +32,66 @@ def chunks_to_sessions(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for chunk in chunks:
         start_ms = chunk.get("startMs", 0)
         end_ms = chunk.get("endMs", 0)
-        summary = chunk.get("summary") or {}
+        active_ms = chunk.get("activeMs", 0) or 0
+        afk_ms = chunk.get("afkMs", 0) or 0
+        entries = chunk.get("entries", [])
 
-        apps_raw = summary.get("apps") or []
-        titles_raw = summary.get("titles") or []
-        domains_raw = summary.get("domains") or []
-        active_ms = summary.get("activeMs", 0) or 0
-        afk_ms = summary.get("afkMs", 0) or 0
+        window_entries = [e for e in entries if e.get("kind") == "window"]
+        browser_entries = [e for e in entries if e.get("kind") == "browser"]
 
-        # Extract unique app names sorted by duration
-        apps = [a["app"] for a in sorted(apps_raw, key=lambda x: x.get("durationMs", 0), reverse=True) if a.get("app")]
-        # Remove browser process names, keep meaningful ones
-        apps = [a for a in apps if a.lower() not in ("chrome.exe", "electron.exe", "brave.exe")]
-        # Add browser back as "Chrome" / "Brave" if it was dominant
-        for a in apps_raw:
-            raw = (a.get("app") or "").lower()
-            if "chrome" in raw and "Chrome" not in apps:
-                apps.insert(0, "Chrome")
-            elif "brave" in raw and "Brave" not in apps:
-                apps.insert(0, "Brave")
+        # apps from window entries
+        app_durations: dict[str, int] = {}
+        for e in window_entries:
+            app = e.get("app") or ""
+            if app:
+                app_durations[app] = app_durations.get(app, 0) + (e.get("durationMs") or 0)
 
-        # Extract window titles
-        titles = list(dict.fromkeys([
-            t["title"] for t in sorted(titles_raw, key=lambda x: x.get("durationMs", 0), reverse=True)
-            if t.get("title")
-        ]))
+        # titles from window entries
+        titles = list(
+            dict.fromkeys(
+                [
+                    e["title"]
+                    for e in sorted(window_entries, key=lambda x: x.get("durationMs", 0), reverse=True)
+                    if e.get("title")
+                ]
+            )
+        )
 
-        # Extract URLs from domains
-        urls = [d["domain"] for d in domains_raw if d.get("domain")]
+        # domains from browser entries
+        domain_durations: dict[str, int] = {}
+        for e in browser_entries:
+            url = e.get("url") or ""
+            if url:
+                try:
+                    domain = urlparse(url).netloc
+                    if domain:
+                        domain_durations[domain] = domain_durations.get(domain, 0) + (e.get("durationMs") or 0)
+                except Exception:
+                    pass
+
+        urls = list(domain_durations.keys())
+
+        # apps list sorted by duration
+        apps_sorted = sorted(app_durations.items(), key=lambda x: x[1], reverse=True)
+        apps = [a[0] for a in apps_sorted if a[0].lower() not in ("", "unknown")]
+
+        # app_breakdown
+        app_breakdown = [
+            {
+                "app": app,
+                "minutes": round(dur / 60000, 1),
+                "titles": [
+                    e["title"] for e in window_entries if e.get("app") == app and e.get("title")
+                ],
+            }
+            for app, dur in apps_sorted
+        ]
 
         duration_sec = (end_ms - start_ms) * MS_TO_SEC
         duration_min = duration_sec / 60
-        activity_rate = round((active_ms / max(active_ms + afk_ms, 1)) * 100, 1) if (active_ms + afk_ms) > 0 else 0.0
+        activity_rate = (
+            round((active_ms / max(active_ms + afk_ms, 1)) * 100, 1) if (active_ms + afk_ms) > 0 else 0.0
+        )
 
         session = {
             "session_id": f"sb_{chunk.get('id', '')}_{start_ms}",
@@ -91,14 +112,7 @@ def chunks_to_sessions(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "activity_rate": activity_rate,
                 "scroll_units": 0,
             },
-            "app_breakdown": [
-                {
-                    "app": a.get("app", ""),
-                    "minutes": round(a.get("durationMs", 0) / 60000, 1),
-                    "titles": [t["title"] for t in titles_raw if t.get("app") == a.get("app")]
-                }
-                for a in apps_raw if a.get("app")
-            ],
+            "app_breakdown": app_breakdown,
             "ai_enrichment": {},
         }
         sessions.append(session)
@@ -114,6 +128,7 @@ def _merge_adjacent_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, A
         return sessions
 
     import datetime
+
     result = [sessions[0]]
     for curr in sessions[1:]:
         prev = result[-1]
@@ -145,11 +160,10 @@ def _dominant_app(session: dict[str, Any]) -> str:
 
 
 def input_activity_to_daily(input_day: dict[str, Any] | None) -> dict[str, Any]:
-    """Convert InputActivityDay to productivity metrics format."""
+    """Convert DailyInputStats aggregate dict to productivity metrics format."""
     if not input_day:
         return {"keystrokes": 0, "mouse_clicks": 0}
     return {
         "keystrokes": input_day.get("presses", 0) or 0,
         "mouse_clicks": input_day.get("clicks", 0) or 0,
     }
-
