@@ -17,12 +17,31 @@ from urllib.parse import urlparse
 
 from utils.helpers import get_domain
 
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None  # type: ignore[assignment]
-    types = None  # type: ignore[assignment]
+_vertex_client = None
+_genai_types = None
+
+
+def _get_vertex_client():
+    """Lazily construct Vertex-backed google.genai Client (not at import time)."""
+    global _vertex_client, _genai_types
+    if _vertex_client is not None:
+        return _vertex_client
+    project = os.getenv("GCP_PROJECT_ID", "").strip()
+    region = os.getenv("GCP_REGION", "us-central1").strip()
+    if not project:
+        return None
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+    except ImportError:
+        return None
+    _vertex_client = genai.Client(
+        vertexai=True,
+        project=project,
+        location=region,
+    )
+    _genai_types = genai_types
+    return _vertex_client
 
 
 # ── Keyword utilities (used by URL validation) ────────────────────────────────
@@ -403,10 +422,8 @@ def _ai_classify_session(
         "map_notes": "AI unavailable (Vertex AI not configured — set GCP_PROJECT_ID, GCP_REGION, GOOGLE_APPLICATION_CREDENTIALS in .env)",
     }
 
-    project = os.getenv("GCP_PROJECT_ID", "").strip()
-    region = os.getenv("GCP_REGION", "us-central1").strip()
-
-    if genai is None or not project:
+    client = _get_vertex_client()
+    if client is None or _genai_types is None:
         return _UNAVAILABLE
 
     t_start, t_end, dow, dur_min = _session_time_ist(session)
@@ -516,15 +533,10 @@ SIGNALS: comma separated list of what drove the decision
 REASON: one clear sentence"""
 
     try:
-        client = genai.Client(
-            vertexai=True,
-            project=project,
-            location=region,
-        )
         resp = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0),
+            config=_genai_types.GenerateContentConfig(temperature=0),
         )
         text = (resp.text or "").strip()
 
@@ -747,7 +759,6 @@ def map_sessions_to_tasks(
     daily_context = daily_context or {}
     employee_name = str(daily_context.get("employee_name") or "the developer").strip() or "the developer"
     prev_task_labels: list[str] = []
-    pass  # Vertex AI initialized per-call in _ai_classify_session
 
     def _track_previous(out_sess: dict) -> None:
         nm = (out_sess.get("clickup_task_name") or "").strip()

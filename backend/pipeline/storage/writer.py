@@ -50,6 +50,69 @@ def _read_json(path: Path):
         return None
 
 
+def _session_ai(s: dict) -> dict:
+    ae = s.get("ai_enrichment")
+    return ae if isinstance(ae, dict) else {}
+
+
+def _session_zone(s: dict):
+    ai = _session_ai(s)
+    z = ai.get("zone")
+    if z is None:
+        z = s.get("zone")
+    return z
+
+
+def _session_map_method(s: dict):
+    ai = _session_ai(s)
+    m = ai.get("map_method")
+    if m is None:
+        m = s.get("map_method")
+    return m
+
+
+def _session_map_confidence(s: dict) -> float:
+    ai = _session_ai(s)
+    c = ai.get("map_confidence")
+    if c is None:
+        c = s.get("map_confidence", 0.0)
+    try:
+        return float(c or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _zone_considered_valid(zone) -> bool:
+    if zone is None:
+        return False
+    z = str(zone).strip().lower()
+    return bool(z) and z not in ("unknown", "unclear")
+
+
+def _existing_session_is_weak(existing: dict) -> bool:
+    """True if cached row should lose to a fresh pipeline session."""
+    if _session_zone(existing) is None:
+        return True
+    m = _session_map_method(existing)
+    if m is None:
+        return True
+    if str(m).strip().lower() == "none":
+        return True
+    return not _zone_considered_valid(_session_zone(existing))
+
+
+def _pick_merged_session(existing: dict | None, new_s: dict) -> dict:
+    if existing is None:
+        return new_s
+    if _existing_session_is_weak(existing):
+        return new_s
+    old_conf = _session_map_confidence(existing)
+    new_conf = _session_map_confidence(new_s)
+    if old_conf >= new_conf:
+        return existing
+    return new_s
+
+
 def _write_json_merge(path: Path, new_obj):
     existing = _read_json(path)
     if existing is None:
@@ -69,7 +132,8 @@ def _write_json_merge(path: Path, new_obj):
 def write_sessions(date: str, sessions: list, out_dir: Path | None = None) -> None:
     """
     Writes to out/sessions_YYYY-MM-DD.json.
-    Never overwrites: merges by session start timestamp.
+    Merges with any existing file by session start: fresh pipeline rows win over stale
+    unmapped cache unless the cached row has a valid zone and higher map_confidence.
     """
     out_dir = out_dir or _ensure_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -142,8 +206,8 @@ def write_sessions(date: str, sessions: list, out_dir: Path | None = None) -> No
         st = str(s.get("start") or "").strip()
         if not st:
             continue
-        # New overwrites old by start timestamp; keep latest version.
-        by_start[st] = s
+        prev = by_start.get(st)
+        by_start[st] = _pick_merged_session(prev, s)
 
     merged_list = sorted(by_start.values(), key=lambda x: str((x or {}).get("start") or ""))
     out_path.write_text(json.dumps(merged_list, indent=2, ensure_ascii=False), encoding="utf-8")
