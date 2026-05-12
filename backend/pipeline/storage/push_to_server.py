@@ -48,8 +48,6 @@ def _post_json(path_suffix: str, body: dict[str, Any]) -> None:
 
     for attempt in range(1, 4):
         try:
-            print(f"[debug] posting to: {url}")
-            print(f"[debug] api key: {(key[:10] + '...') if len(key) > 10 else (key + '...')}")
             resp = requests.post(url, json=body, headers=headers, timeout=30)
             if resp.status_code < 400:
                 print(f"[push] ✓ {path_suffix} → {resp.status_code}")
@@ -231,7 +229,6 @@ def push_eod_report(date_str: str, out_dir: Path) -> None:
             "performance_signals": performance_signals,
             "untracked": untracked_out,
         }
-        print(f"[debug] narrative preview: {str(body.get('narrative', ''))[:100]}")
         _post_json("/api/v1/pipeline/eod-report", body)
     except Exception:
         return
