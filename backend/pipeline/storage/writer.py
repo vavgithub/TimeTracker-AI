@@ -56,11 +56,10 @@ def _session_ai(s: dict) -> dict:
 
 
 def _session_zone(s: dict):
+    if not isinstance(s, dict):
+        return None
     ai = _session_ai(s)
-    z = ai.get("zone")
-    if z is None:
-        z = s.get("zone")
-    return z
+    return s.get("zone") or ai.get("zone")
 
 
 def _session_map_method(s: dict):
@@ -153,6 +152,20 @@ def write_sessions(date: str, sessions: list, out_dir: Path | None = None) -> No
 
     normalized = []
     for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        ae = s.get("ai_enrichment") if isinstance(s.get("ai_enrichment"), dict) else {}
+        if ae.get("zone") and not s.get("zone"):
+            s["zone"] = ae["zone"]
+        if ae.get("clickup_task_id") and not s.get("clickup_task_id"):
+            s["clickup_task_id"] = ae["clickup_task_id"]
+        if ae.get("clickup_task_name") and not s.get("clickup_task_name"):
+            s["clickup_task_name"] = ae["clickup_task_name"]
+        if ae.get("map_confidence") and not s.get("map_confidence"):
+            s["map_confidence"] = ae["map_confidence"]
+        if ae.get("map_method") and not s.get("map_method"):
+            s["map_method"] = ae["map_method"]
+
         start = _to_iso(s.get("start"))
         end = _to_iso(s.get("end"))
 
@@ -174,6 +187,13 @@ def write_sessions(date: str, sessions: list, out_dir: Path | None = None) -> No
             "user": USER_EMAIL,
             "start": start,
             "end": end,
+            "zone": zone,
+            "clickup_task_id": clickup_task_id,
+            "clickup_task_name": clickup_task_name,
+            "map_confidence": map_confidence,
+            "map_method": map_method,
+            "map_tier": map_tier,
+            "map_notes": map_notes,
             # Keep minutes for backward compatibility; hours is the preferred admin view.
             "duration_min": float(s.get("duration_min", 0.0) or 0.0),
             "duration_hours": _qtr_hour(float(s.get("duration_min", 0.0) or 0.0) / 60.0),

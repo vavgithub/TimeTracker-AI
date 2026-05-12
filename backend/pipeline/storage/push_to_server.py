@@ -125,8 +125,6 @@ def push_daily_summary(date_str: str, out_dir: Path) -> None:
 
 def push_eod_report(date_str: str, out_dir: Path) -> None:
     """POST /api/v1/pipeline/eod-report — trimmed tasks, meetings, performance_signals, untracked + narrative."""
-    from pipeline.eod.summary_writer import format_eod_clickup_message
-
     try:
         path = out_dir / f"eod_{date_str}.json"
         full = _read_json(path)
@@ -135,11 +133,7 @@ def push_eod_report(date_str: str, out_dir: Path) -> None:
 
         user = str(full.get("user") or USER_EMAIL).strip()
         print(f"[push] eod-report → {date_str} for {user}")
-        narrative = ""
-        try:
-            narrative = format_eod_clickup_message(dict(full))
-        except Exception:
-            narrative = ""
+        narrative = str(full.get("narrative") or "").strip()
 
         tasks_out: list[dict[str, Any]] = []
         for t in full.get("tasks") or []:
@@ -237,6 +231,7 @@ def push_eod_report(date_str: str, out_dir: Path) -> None:
             "performance_signals": performance_signals,
             "untracked": untracked_out,
         }
+        print(f"[debug] narrative preview: {str(body.get('narrative', ''))[:100]}")
         _post_json("/api/v1/pipeline/eod-report", body)
     except Exception:
         return

@@ -221,6 +221,11 @@ def _extract_task_id(session_obj: dict) -> str | None:
     return tid_s or None
 
 
+def _extract_task_name(s: dict) -> str | None:
+    ae = s.get("ai_enrichment") if isinstance(s.get("ai_enrichment"), dict) else {}
+    return ae.get("clickup_task_name") or s.get("clickup_task_name")
+
+
 def _extract_session_confidence(session_obj: dict) -> float | None:
     if not isinstance(session_obj, dict):
         return None
@@ -232,12 +237,16 @@ def _extract_session_confidence(session_obj: dict) -> float | None:
     return None
 
 
-def _extract_zone(session_obj: dict) -> str:
-    if not isinstance(session_obj, dict):
+def _session_zone(s: dict) -> str:
+    if not isinstance(s, dict):
         return "unknown"
-    ae = session_obj.get("ai_enrichment") if isinstance(session_obj.get("ai_enrichment"), dict) else {}
-    z = ae.get("zone") or session_obj.get("zone") or "unknown"
+    ae = s.get("ai_enrichment") if isinstance(s.get("ai_enrichment"), dict) else {}
+    z = s.get("zone") or ae.get("zone") or "unknown"
     return str(z)
+
+
+def _extract_zone(session_obj: dict) -> str:
+    return _session_zone(session_obj)
 
 
 _TITLE_HINT_MAX = 30
@@ -397,6 +406,188 @@ def _build_tools_for_task_name(
     return rows
 
 
+_NOISE_TITLES_FOR_NARRATIVE = frozenset({"loading", "unknown", "", "new tab", "untitled"})
+
+
+def _session_app_minutes_from_breakdown(session: dict) -> dict[str, float]:
+    """Per-app minutes from one session's app_breakdown (AW + Supabase shapes)."""
+    per_app: dict[str, float] = defaultdict(float)
+    bd = session.get("app_breakdown")
+    if not isinstance(bd, list):
+        return dict(per_app)
+    for entry in bd:
+        if not isinstance(entry, dict):
+            continue
+        app = str(entry.get("app") or "unknown").strip() or "unknown"
+        if entry.get("durationMs") is not None:
+            per_app[app] += float(entry.get("durationMs") or 0) / 60000.0
+        elif entry.get("total_minutes") is not None:
+            per_app[app] += float(entry.get("total_minutes") or 0)
+        elif entry.get("minutes") is not None:
+            per_app[app] += float(entry.get("minutes") or 0)
+        elif isinstance(entry.get("tabs"), list):
+            tab_sum = 0.0
+            for tab in entry["tabs"]:
+                if isinstance(tab, dict):
+                    tab_sum += float(tab.get("minutes") or tab.get("duration_minutes") or 0)
+            if tab_sum > 0:
+                per_app[app] += tab_sum
+    return dict(per_app)
+
+
+def _narrative_metrics_from_sessions(sessions_list: list) -> tuple[str, str, float, int]:
+    """Top apps label, window titles label, mean activity %, task-linked session count."""
+    noise = _NOISE_TITLES_FOR_NARRATIVE
+    app_totals: dict[str, float] = defaultdict(float)
+    seen_titles: set[str] = set()
+    ordered_titles: list[str] = []
+    rates: list[float] = []
+    task_linked = 0
+
+    for s in sessions_list:
+        if not isinstance(s, dict):
+            continue
+        if str(_extract_zone(s) or "").lower().strip() == "task_linked":
+            task_linked += 1
+        for app, mins in _session_app_minutes_from_breakdown(s).items():
+            if app.lower() in ("", "unknown"):
+                continue
+            app_totals[app] += mins
+        for t in s.get("titles") or []:
+            if len(ordered_titles) >= 10:
+                break
+            tt = str(t).strip()
+            if len(tt) < 3 or tt.lower() in noise:
+                continue
+            if tt not in seen_titles:
+                seen_titles.add(tt)
+                ordered_titles.append(tt)
+        if len(ordered_titles) < 10:
+            bd = s.get("app_breakdown")
+            if isinstance(bd, list):
+                for entry in bd:
+                    if len(ordered_titles) >= 10:
+                        break
+                    if not isinstance(entry, dict):
+                        continue
+                    for tit in entry.get("titles") or []:
+                        if len(ordered_titles) >= 10:
+                            break
+                        tt = str(tit).strip()
+                        if len(tt) < 3 or tt.lower() in noise:
+                            continue
+                        if tt not in seen_titles:
+                            seen_titles.add(tt)
+                            ordered_titles.append(tt)
+                    tabs = entry.get("tabs")
+                    if isinstance(tabs, list):
+                        for tab in tabs:
+                            if len(ordered_titles) >= 10:
+                                break
+                            if not isinstance(tab, dict):
+                                continue
+                            tit = tab.get("title")
+                            if not tit:
+                                continue
+                            tt = str(tit).strip()
+                            if len(tt) < 3 or tt.lower() in noise:
+                                continue
+                            if tt not in seen_titles:
+                                seen_titles.add(tt)
+                                ordered_titles.append(tt)
+        inp = s.get("input")
+        r = None
+        if isinstance(inp, dict) and inp.get("activity_rate") is not None:
+            r = inp.get("activity_rate")
+        if r is None and s.get("activity_rate") is not None:
+            r = s.get("activity_rate")
+        if r is not None:
+            try:
+                rates.append(float(r))
+            except (TypeError, ValueError):
+                pass
+
+    if app_totals:
+        top_apps = ", ".join(
+            f"{a} (~{round(m)} min)"
+            for a, m in sorted(app_totals.items(), key=lambda x: x[1], reverse=True)[:8]
+        )
+    else:
+        top_apps = "None"
+    top_titles = "; ".join(ordered_titles[:10]) if ordered_titles else "None"
+    avg_activity = round(sum(rates) / len(rates), 1) if rates else 0.0
+    return top_apps, top_titles, avg_activity, task_linked
+
+
+def _generate_narrative_from_sessions(
+    employee: str,
+    summary_date: str,
+    tasks: list[dict],
+    meetings: list[dict],
+    tracked_minutes: float,
+    session_count: int,
+    sessions_list: list,
+) -> str:
+    try:
+        from pipeline.mapping.task_mapper import _get_vertex_client
+
+        client = _get_vertex_client()
+        if not client:
+            return ""
+
+        top_apps, top_titles, avg_activity, task_linked_sessions = _narrative_metrics_from_sessions(
+            sessions_list
+        )
+
+        task_lines = "\n".join(
+            f"- {t.get('name', '')} ({round(float(t.get('today_minutes') or 0))} min)"
+            for t in tasks
+            if isinstance(t, dict)
+        )
+        meeting_lines = (
+            "\n".join(
+                f"- {m.get('name', 'Meeting')} ({int(m.get('minutes') or 0)} min)"
+                for m in meetings
+                if isinstance(m, dict)
+            )
+            if meetings
+            else "None"
+        )
+
+        prompt = f"""Write a 2-3 sentence professional EOD summary for {employee}.
+Date: {summary_date}
+Total tracked: {round(tracked_minutes)} minutes across {session_count} sessions
+Task-linked sessions: {task_linked_sessions}
+
+Tasks worked on:
+{task_lines if task_lines else "No tasks mapped"}
+
+Meetings:
+{meeting_lines}
+
+Top apps: {top_apps}
+Key activities (window titles): {top_titles}
+Average activity rate: {avg_activity}%
+
+Write in third person. Be specific about what was worked on.
+Keep it concise and professional. No bullet points."""
+
+        from google.genai import types as genai_types
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                max_output_tokens=1000,
+                temperature=0.3,
+            ),
+        )
+        return response.text.strip() if response.text else ""
+    except Exception as e:
+        print(f"[eod] narrative generation failed: {e}")
+        return ""
+
+
 def generate_eod_summary(
     summary_date: str,
     user_email: str,
@@ -452,20 +643,124 @@ def generate_eod_summary(
     assert len(work_segments) <= len(segment_rows)
     print(f"All segments: {len(segment_rows)} Work segments: {len(work_segments)}")
 
+    if len(work_segments) == 0:
+        # Supabase (and other) pipelines often have no segment file — derive EOD from sessions JSON.
+        sessions_list = sessions
+        task_totals: dict[str, dict] = {}
+        for s in sessions_list:
+            if not isinstance(s, dict):
+                continue
+            zone = str(_extract_zone(s) or "").lower().strip()
+            if zone != "task_linked":
+                continue
+            task_id = _extract_task_id(s)
+            task_name = _extract_task_name(s)
+            if not task_id or not task_name:
+                continue
+            dur = float(s.get("duration_min") or 0.0)
+            if task_id not in task_totals:
+                task_totals[task_id] = {
+                    "task_id": task_id,
+                    "name": task_name,
+                    "today_minutes": 0.0,
+                    "parent_name": None,
+                    "task_em_dash_parent": None,
+                    "segment_match_names": [],
+                    "status": None,
+                    "time_estimate_minutes": None,
+                    "due_date": None,
+                    "is_overdue": False,
+                    "days_overdue": 0,
+                    "percent_of_estimate": None,
+                    "avg_confidence": None,
+                    "skill_category": "general",
+                    "tools": [],
+                }
+            task_totals[task_id]["today_minutes"] += dur
+
+        tasks_out_fb: list[dict] = []
+        for row in task_totals.values():
+            row["today_minutes"] = round(float(row["today_minutes"]), 1)
+            row["skill_category"] = categorise_task(str(row.get("name") or ""), "")
+            tasks_out_fb.append(row)
+
+        meetings_out_fb: list[dict] = []
+        for s in sessions_list:
+            if not isinstance(s, dict):
+                continue
+            if str(_extract_zone(s) or "").lower().strip() != "meeting":
+                continue
+            name = _extract_task_name(s) or "Meeting"
+            dur = float(s.get("duration_min") or 0.0)
+            if dur <= 0:
+                continue
+            meetings_out_fb.append({"name": name, "minutes": int(round(dur))})
+
+        tracked_minutes_fb = sum(
+            float(s.get("duration_min") or 0.0)
+            for s in sessions_list
+            if isinstance(s, dict)
+            and str(_extract_zone(s) or "").lower().strip() in ("task_linked", "meeting")
+        )
+        deep_work_fb = sum(float(t.get("today_minutes") or 0.0) for t in tasks_out_fb)
+
+        performance_signals_fb = {
+            "tasks_completed_today": [],
+            "tasks_overdue": [],
+            "tasks_over_estimate": [],
+            "tasks_within_estimate": [],
+        }
+        session_count_fb = sum(1 for s in sessions_list if isinstance(s, dict))
+
+        narrative = _generate_narrative_from_sessions(
+            user_email,
+            summary_date,
+            tasks_out_fb,
+            meetings_out_fb,
+            tracked_minutes_fb,
+            len(sessions_list),
+            sessions_list,
+        )
+
+        summary_fb = {
+            "date": summary_date,
+            "user": user_email,
+            "narrative": narrative
+            or (
+                f"EOD — {summary_date} (IST)\n"
+                f"Tracked: {int(round(tracked_minutes_fb))}m | Sessions: {session_count_fb}"
+            ),
+            "productivity": prod,
+            "computed": {
+                "tracked_minutes": round(tracked_minutes_fb, 1),
+                "deep_work_minutes": round(deep_work_fb, 1),
+            },
+            "session_count": session_count_fb,
+            "tasks": tasks_out_fb,
+            "performance_signals": performance_signals_fb,
+            "meetings": meetings_out_fb,
+            "untracked": [],
+            "low_confidence_sessions": [],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        out_path_fb = out_dir / f"eod_{summary_date}.json"
+        out_path_fb.write_text(json.dumps(summary_fb, indent=2, ensure_ascii=False), encoding="utf-8")
+        return summary_fb
+
     task_minutes = sum(
         _safe_float(s.get("duration_minutes"), 0.0)
         for s in work_segments
-        if str(s.get("zone") or "").lower() == "task_linked"
+        if str(_session_zone(s) or "").lower() == "task_linked"
     )
     meeting_minutes = sum(
         _safe_float(s.get("duration_minutes"), 0.0)
         for s in work_segments
-        if str(s.get("zone") or "").lower() == "meeting"
+        if str(_session_zone(s) or "").lower() == "meeting"
     )
     untracked_minutes = sum(
         _safe_float(s.get("duration_minutes"), 0.0)
         for s in work_segments
-        if str(s.get("zone") or "").lower() == "untracked_work"
+        if str(_session_zone(s) or "").lower() == "untracked_work"
     )
 
     active_minutes = task_minutes + meeting_minutes + untracked_minutes
@@ -481,7 +776,7 @@ def generate_eod_summary(
     minutes_by_task: dict[str, float] = defaultdict(float)
     segment_task_name_by_id: dict[str, str] = {}
     for seg in work_segments:
-        if str(seg.get("zone") or "").lower() != "task_linked":
+        if str(_session_zone(seg) or "").lower() != "task_linked":
             continue
         dur = _safe_float(seg.get("duration_minutes"), 0.0)
         if dur <= 0:
@@ -500,7 +795,7 @@ def generate_eod_summary(
     # Meetings summary from segments (work-hours only)
     meetings_by_name: dict[str, float] = defaultdict(float)
     for seg in work_segments:
-        if str(seg.get("zone") or "").lower() != "meeting":
+        if str(_session_zone(seg) or "").lower() != "meeting":
             continue
         dur = _safe_float(seg.get("duration_minutes"), 0.0)
         if dur <= 0:
@@ -578,9 +873,7 @@ Reply with ONLY the phrase.
                             "start": s.get("start"),
                             "end": s.get("end"),
                             "zone": _extract_zone(s),
-                            "clickup_task_name": (s.get("ai_enrichment") or {}).get("clickup_task_name")
-                            if isinstance(s.get("ai_enrichment"), dict)
-                            else s.get("clickup_task_name"),
+                            "clickup_task_name": _extract_task_name(s),
                             "confidence": c,
                         }
                     )
@@ -625,8 +918,7 @@ Reply with ONLY the phrase.
     for tid, mins in sorted(minutes_by_task.items(), key=lambda kv: (-kv[1], kv[0])):
         detail = get_task_detail(tid)
         raw_clickup_name = str(detail.get("name") or "").strip() or segment_task_name_by_id.get(str(tid), "").strip() or str(
-            ((next((s for s in sessions if _extract_task_id(s) == tid), {}) or {}).get("ai_enrichment") or {}).get("clickup_task_name")
-            or ""
+            _extract_task_name(next((s for s in sessions if _extract_task_id(s) == tid), {})) or ""
         ).strip()
         display_name, em_dash_parent = _split_em_dash_display(raw_clickup_name)
         name = (display_name or raw_clickup_name or tid).strip()
