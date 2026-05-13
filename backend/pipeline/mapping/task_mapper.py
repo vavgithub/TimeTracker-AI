@@ -22,6 +22,7 @@ _genai_types = None
 
 
 def _get_vertex_client():
+    print("[task_mapper] _get_vertex_client called")
     global _vertex_client, _genai_types
     if _vertex_client is not None:
         return _vertex_client
@@ -794,6 +795,10 @@ def map_sessions_to_tasks(
       3. ClickUp task URL in session → near-certain with activity validation
       4. AI classification (Gemini)  → primary path for everything else
     """
+    print(
+        f"[task_mapper] mapping {len(sessions)} sessions "
+        f"against {len(tasks or [])} tasks"
+    )
     tasks = tasks or []
     time_entries = time_entries or []
     calendar_events = calendar_events or []
