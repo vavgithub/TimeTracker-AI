@@ -23,11 +23,16 @@ _genai_types = None
 
 def _get_vertex_client():
     print("[task_mapper] _get_vertex_client called")
+    print(f"[task_mapper] cached={_vertex_client is not None}")
     global _vertex_client, _genai_types
     if _vertex_client is not None:
         return _vertex_client
     project = os.getenv("GCP_PROJECT_ID", "").strip()
     region = os.getenv("GCP_REGION", "us-central1").strip()
+    print(
+        f"[task_mapper] project={project!r} "
+        f"key_set={bool((os.getenv('GEMINI_API_KEY') or '').strip())}"
+    )
     if not project:
         return None
     try:
@@ -62,7 +67,7 @@ def _get_vertex_client():
         _genai_types = genai_types_module
         return _vertex_client
     except Exception as e:
-        print(f"[task_mapper] Vertex AI unavailable: {e}, trying Gemini API key fallback")
+        print(f"[task_mapper] Vertex FAILED: {type(e).__name__}: {e}")
 
     # Fallback to Gemini API key
     api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
@@ -71,10 +76,12 @@ def _get_vertex_client():
             client = genai.Client(api_key=api_key)
             _vertex_client = client
             _genai_types = genai_types_module
+            print(f"[task_mapper] API key fallback key_set={bool(api_key)}")
             print("[task_mapper] Using Gemini API key fallback")
             return _vertex_client
         except Exception as e:
             print(f"[task_mapper] Gemini API key fallback failed: {e}")
+    print(f"[task_mapper] API key fallback key_set={bool(api_key)}")
 
     return None
 
