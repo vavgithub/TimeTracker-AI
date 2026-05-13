@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       user_id:
-        description: Supabase user ID
-        required: true
+        description: Supabase user ID (ignored, runs for all users)
+        required: false
         type: string
       date:
-        description: Date in YYYY-MM-DD format
-        required: true
+        description: Date (ignored, uses today)
+        required: false
         type: string
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
       - name: Write GCP credentials
         run: echo '${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}' > /tmp/service_account.json
 
-      - name: Run EOD for user
+      - name: Run EOD for all users
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -43,8 +43,4 @@ jobs:
           PUSH_API_KEY: ${{ secrets.PUSH_API_KEY }}
           EMPLOYEE_ROLE: ${{ secrets.EMPLOYEE_ROLE }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: >
-          python3 backend/worker.py
-          --user-id "${{ inputs.user_id }}"
-          --date "${{ inputs.date }}"
-          --eod-only
+        run: python3 backend/worker.py --eod-only

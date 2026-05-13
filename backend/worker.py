@@ -52,14 +52,12 @@ def main() -> None:
     results = []
     if args.eod_only:
         target_id = (args.user_id or "").strip()
-        if not target_id:
-            print("[worker] --eod-only requires --user-id")
-            return
-        user = next((u for u in users if str(u.get("id") or "") == target_id), None)
-        if not user:
-            print(f"[worker] user not found: {target_id}")
-            return
-        users = [user]
+        if target_id:
+            user = next((u for u in users if str(u.get("id") or "") == target_id), None)
+            if not user:
+                print(f"[worker] user not found: {target_id}")
+                return
+            users = [user]
 
     for user in users:
         user_id = user.get("id", "")
@@ -81,9 +79,6 @@ def main() -> None:
         except Exception as e:
             print(f"[worker] ✗ {user_email}: {e}")
             results.append({"status": "error", "user": user_email, "error": str(e)})
-
-        if args.eod_only:
-            return
 
     ok = sum(1 for r in results if r.get("status") == "ok")
     skip = sum(1 for r in results if r.get("status") == "no_data")
