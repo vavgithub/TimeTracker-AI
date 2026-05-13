@@ -22,9 +22,9 @@ _genai_types = None
 
 
 def _get_vertex_client():
+    global _vertex_client, _genai_types
     print("[task_mapper] _get_vertex_client called")
     print(f"[task_mapper] cached={_vertex_client is not None}")
-    global _vertex_client, _genai_types
     if _vertex_client is not None:
         return _vertex_client
     project = os.getenv("GCP_PROJECT_ID", "").strip()
