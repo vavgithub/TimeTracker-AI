@@ -9,10 +9,8 @@ Priority order:
 """
 from __future__ import annotations
 
-import errno
 import os
 import re
-import socket
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -23,63 +21,7 @@ _vertex_client = None
 _genai_types = None
 
 
-def _is_dns_or_connectivity_error(exc: BaseException) -> bool:
-    """True when Vertex is likely unreachable (DNS / TCP), not e.g. bad auth or model errors."""
-    if isinstance(exc, socket.gaierror):
-        return True
-    if isinstance(exc, (ConnectionError, TimeoutError)):
-        return True
-    if isinstance(exc, OSError):
-        err = getattr(exc, "errno", None)
-        if err in (errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ENETUNREACH, errno.EHOSTUNREACH):
-            return True
-    cur: BaseException | None = exc
-    seen: set[int] = set()
-    needles = (
-        "name or service not known",
-        "nodename nor servname",
-        "failed to resolve",
-        "name resolution",
-        "getaddrinfo",
-        "temporary failure in name resolution",
-        "dns",
-        "connection refused",
-        "connection reset",
-        "timed out",
-        "network is unreachable",
-        "no route to host",
-    )
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        msg = str(cur).lower()
-        if any(n in msg for n in needles):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
-def _get_gemini_api_client_from_env():
-    """Google AI Gemini client using GEMINI_API_KEY or GOOGLE_API_KEY (Developer API, not Vertex)."""
-    global _genai_types
-    from google import genai
-    from google.genai import types as genai_types
-
-    if _genai_types is None:
-        _genai_types = genai_types
-    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    if not key:
-        return None
-    return genai.Client(api_key=key)
-
-
-def _install_genai_fallback_client(client) -> None:
-    """After a successful Gemini API call, reuse that client for the rest of the process."""
-    global _vertex_client
-    _vertex_client = client
-
-
 def _get_vertex_client():
-    """Lazily construct Vertex-backed google.genai Client; optional Gemini API key fallback after DNS failures."""
     global _vertex_client, _genai_types
     if _vertex_client is not None:
         return _vertex_client
@@ -89,33 +31,51 @@ def _get_vertex_client():
         return None
     try:
         from google import genai
-        from google.genai import types as genai_types
+        from google.genai import types as genai_types_module
     except ImportError:
         return None
 
-    cred_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    # Try Vertex AI first
+    try:
+        cred_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if cred_file and os.path.exists(cred_file):
+            from google.oauth2 import service_account
 
-    if cred_file and os.path.exists(cred_file):
-        from google.oauth2 import service_account
+            credentials = service_account.Credentials.from_service_account_file(
+                cred_file,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            client = genai.Client(
+                vertexai=True,
+                project=project,
+                location=region,
+                credentials=credentials,
+            )
+        else:
+            client = genai.Client(
+                vertexai=True,
+                project=project,
+                location=region,
+            )
+        _vertex_client = client
+        _genai_types = genai_types_module
+        return _vertex_client
+    except Exception as e:
+        print(f"[task_mapper] Vertex AI unavailable: {e}, trying Gemini API key fallback")
 
-        credentials = service_account.Credentials.from_service_account_file(
-            cred_file,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        _vertex_client = genai.Client(
-            vertexai=True,
-            project=project,
-            location=region,
-            credentials=credentials,
-        )
-    else:
-        _vertex_client = genai.Client(
-            vertexai=True,
-            project=project,
-            location=region,
-        )
-    _genai_types = genai_types
-    return _vertex_client
+    # Fallback to Gemini API key
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+            _vertex_client = client
+            _genai_types = genai_types_module
+            print("[task_mapper] Using Gemini API key fallback")
+            return _vertex_client
+        except Exception as e:
+            print(f"[task_mapper] Gemini API key fallback failed: {e}")
+
+    return None
 
 
 # ── Keyword utilities (used by URL validation) ────────────────────────────────
@@ -618,16 +578,7 @@ SIGNALS: comma separated list of what drove the decision
 REASON: one clear sentence"""
 
     try:
-        try:
-            resp = _generate_classify_content(client, prompt)
-        except Exception as vertex_exc:
-            if not _is_dns_or_connectivity_error(vertex_exc):
-                raise
-            fb = _get_gemini_api_client_from_env()
-            if fb is None:
-                raise vertex_exc
-            resp = _generate_classify_content(fb, prompt)
-            _install_genai_fallback_client(fb)
+        resp = _generate_classify_content(client, prompt)
         text = (resp.text or "").strip()
 
         # Parse the structured response
