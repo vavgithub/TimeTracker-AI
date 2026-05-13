@@ -115,22 +115,25 @@ def run_for_user(
     write_sessions(date_str, results, out_dir=out_dir)
     write_daily_summary(date_str, dict(zone_minutes), totals, out_dir=out_dir)
 
-    # 9. Generate EOD
-    eod = generate_eod_summary(date_str, user_email, out_dir=out_dir)
+    # 9. Generate EOD (Gemini narrative in JSON only when post_eod=True; otherwise template)
+    eod = generate_eod_summary(
+        date_str,
+        user_email,
+        out_dir=out_dir,
+        skip_eod_ai_narrative=not post_eod,
+    )
 
-    # Push daily-summary + skill profile (daily window; week_ending in API = date_str)
+    # Push daily-summary + skill profile + eod-report (daily window; week_ending in API = date_str)
     if push:
         push_daily_summary(date_str, out_dir)
         day_key = (date_str or "").strip()[:10]
         write_skill_profile(day_key, "daily", user_email, out_dir=out_dir)
         push_skill_profile(day_key, out_dir)
+        push_eod_report(date_str, out_dir)
 
     if post_eod:
         _ = format_eod_clickup_message(eod)
-
-        if push:
-            push_eod_report(date_str, out_dir)
-            print(f"[supabase_runner] pushed EOD for {user_email}")
+        print(f"[supabase_runner] EOD ClickUp message built for {user_email}")
 
     return {
         "status": "ok",

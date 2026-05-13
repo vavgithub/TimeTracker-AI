@@ -593,6 +593,7 @@ def generate_eod_summary(
     user_email: str,
     *,
     skip_ai: bool = False,
+    skip_eod_ai_narrative: bool = False,
     out_dir: Path | None = None,
 ) -> dict:
     out_dir = out_dir or _ensure_out_dir()
@@ -712,15 +713,18 @@ def generate_eod_summary(
         }
         session_count_fb = sum(1 for s in sessions_list if isinstance(s, dict))
 
-        narrative = _generate_narrative_from_sessions(
-            user_email,
-            summary_date,
-            tasks_out_fb,
-            meetings_out_fb,
-            tracked_minutes_fb,
-            len(sessions_list),
-            sessions_list,
-        )
+        if skip_eod_ai_narrative:
+            narrative = ""
+        else:
+            narrative = _generate_narrative_from_sessions(
+                user_email,
+                summary_date,
+                tasks_out_fb,
+                meetings_out_fb,
+                tracked_minutes_fb,
+                len(sessions_list),
+                sessions_list,
+            )
 
         summary_fb = {
             "date": summary_date,
@@ -1037,9 +1041,29 @@ Reply with ONLY the phrase.
         ],
     }
 
+    if skip_eod_ai_narrative:
+        narrative_str = (
+            f"EOD — {summary_date} (IST)\n"
+            f"Tracked: {int(round(tracked_minutes))}m | Sessions: {session_count}"
+        )
+    else:
+        narrative_str = _generate_narrative_from_sessions(
+            user_email,
+            summary_date,
+            tasks_out,
+            meetings_out,
+            tracked_minutes,
+            session_count,
+            sessions,
+        ) or (
+            f"EOD — {summary_date} (IST)\n"
+            f"Tracked: {int(round(tracked_minutes))}m | Sessions: {session_count}"
+        )
+
     summary = {
         "date": summary_date,
         "user": user_email,
+        "narrative": narrative_str,
         "productivity": prod,
         "computed": {
             "tracked_minutes": round(tracked_minutes, 1),
