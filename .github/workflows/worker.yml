@@ -35,5 +35,6 @@ jobs:
           ADMIN_SERVER_URL: ${{ secrets.ADMIN_SERVER_URL }}
           PUSH_API_KEY: ${{ secrets.PUSH_API_KEY }}
           EMPLOYEE_ROLE: ${{ secrets.EMPLOYEE_ROLE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python3 backend/worker.py
 

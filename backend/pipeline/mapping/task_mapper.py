@@ -9,8 +9,10 @@ Priority order:
 """
 from __future__ import annotations
 
+import errno
 import os
 import re
+import socket
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -21,8 +23,63 @@ _vertex_client = None
 _genai_types = None
 
 
+def _is_dns_or_connectivity_error(exc: BaseException) -> bool:
+    """True when Vertex is likely unreachable (DNS / TCP), not e.g. bad auth or model errors."""
+    if isinstance(exc, socket.gaierror):
+        return True
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(exc, OSError):
+        err = getattr(exc, "errno", None)
+        if err in (errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ENETUNREACH, errno.EHOSTUNREACH):
+            return True
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    needles = (
+        "name or service not known",
+        "nodename nor servname",
+        "failed to resolve",
+        "name resolution",
+        "getaddrinfo",
+        "temporary failure in name resolution",
+        "dns",
+        "connection refused",
+        "connection reset",
+        "timed out",
+        "network is unreachable",
+        "no route to host",
+    )
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        msg = str(cur).lower()
+        if any(n in msg for n in needles):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _get_gemini_api_client_from_env():
+    """Google AI Gemini client using GEMINI_API_KEY or GOOGLE_API_KEY (Developer API, not Vertex)."""
+    global _genai_types
+    from google import genai
+    from google.genai import types as genai_types
+
+    if _genai_types is None:
+        _genai_types = genai_types
+    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not key:
+        return None
+    return genai.Client(api_key=key)
+
+
+def _install_genai_fallback_client(client) -> None:
+    """After a successful Gemini API call, reuse that client for the rest of the process."""
+    global _vertex_client
+    _vertex_client = client
+
+
 def _get_vertex_client():
-    """Lazily construct Vertex-backed google.genai Client (not at import time)."""
+    """Lazily construct Vertex-backed google.genai Client; optional Gemini API key fallback after DNS failures."""
     global _vertex_client, _genai_types
     if _vertex_client is not None:
         return _vertex_client
@@ -412,6 +469,17 @@ def _browser_tabs_from_session(session: dict) -> str:
     return f"TITLES:\n{title_block}\n\nURLS:\n{url_block}"
 
 
+def _generate_classify_content(client, prompt: str):
+    """Single generate_content call for session classification (Vertex or Gemini API client)."""
+    if _genai_types is None:
+        raise RuntimeError("genai types not loaded")
+    return client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=_genai_types.GenerateContentConfig(temperature=0),
+    )
+
+
 # ── AI primary classifier ─────────────────────────────────────────────────────
 
 def _ai_classify_session(
@@ -436,7 +504,7 @@ def _ai_classify_session(
         "map_confidence": 0.0,
         "map_method": "none",
         "map_tier": None,
-        "map_notes": "AI unavailable (Vertex AI not configured — set GCP_PROJECT_ID, GCP_REGION, GOOGLE_APPLICATION_CREDENTIALS in .env)",
+        "map_notes": "AI unavailable (Vertex AI not configured — set GCP_PROJECT_ID, GCP_REGION, GOOGLE_APPLICATION_CREDENTIALS; for DNS/connectivity failures set GEMINI_API_KEY or GOOGLE_API_KEY for Gemini API fallback)",
     }
 
     client = _get_vertex_client()
@@ -550,11 +618,16 @@ SIGNALS: comma separated list of what drove the decision
 REASON: one clear sentence"""
 
     try:
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=_genai_types.GenerateContentConfig(temperature=0),
-        )
+        try:
+            resp = _generate_classify_content(client, prompt)
+        except Exception as vertex_exc:
+            if not _is_dns_or_connectivity_error(vertex_exc):
+                raise
+            fb = _get_gemini_api_client_from_env()
+            if fb is None:
+                raise vertex_exc
+            resp = _generate_classify_content(fb, prompt)
+            _install_genai_fallback_client(fb)
         text = (resp.text or "").strip()
 
         # Parse the structured response
