@@ -40,8 +40,8 @@ def _get_vertex_client():
             _genai_types = genai_types_module
             print("[task_mapper] Using Gemini API key")
             return _vertex_client
-        except Exception as e:
-            print(f"[task_mapper] Gemini API key failed: {e}")
+        except Exception:
+            pass
 
     # Fall back to Vertex AI
     project = os.getenv("GCP_PROJECT_ID", "").strip()
@@ -57,8 +57,8 @@ def _get_vertex_client():
         _genai_types = genai_types_module
         print("[task_mapper] Using Vertex AI")
         return _vertex_client
-    except Exception as e:
-        print(f"[task_mapper] Vertex AI failed: {e}")
+    except Exception:
+        pass
 
     return None
 
