@@ -35,11 +35,28 @@ def _get_vertex_client():
         from google.genai import types as genai_types
     except ImportError:
         return None
-    _vertex_client = genai.Client(
-        vertexai=True,
-        project=project,
-        location=region,
-    )
+
+    cred_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+
+    if cred_file and os.path.exists(cred_file):
+        from google.oauth2 import service_account
+
+        credentials = service_account.Credentials.from_service_account_file(
+            cred_file,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        _vertex_client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=region,
+            credentials=credentials,
+        )
+    else:
+        _vertex_client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=region,
+        )
     _genai_types = genai_types
     return _vertex_client
 
